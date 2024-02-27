@@ -1,0 +1,52 @@
+<!DOCTYPE HTML>
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width,user-scalable=no" />
+    <style>
+       @font-face {
+          font-family: "Corbert";
+          src: url("corbert.otf");
+      }
+      html { 
+        width:100%; 
+        height:100%; 
+      }
+      body {
+        margin: 0px;
+        padding: 0px;
+        width:100%; 
+        height:100%;
+        background-color: #aaaaaa;
+        font-family: Corbert, Sans-Serif;
+      }
+      #maze {  
+        outline: 0px;  
+        border: 5px solid #888888;  
+        display: block;
+        overflow:hidden;  
+        margin-left: auto;
+        margin-right: auto;
+        height: 768px;
+        height: 1024px;
+      } 
+      canvas{  
+        display: block;
+        position: absolute;
+      } 
+
+    </style>
+  </head>
+  <body>
+    <div>a maze</div>
+    <div>Work it out with your finger!</div>
+    <div id="maze">
+      <canvas id="c1" style="z-index:1"></canvas>
+      <canvas id="c2" style="z-index:2"></canvas>
+    </div>
+    <script src="jquery-2.1.1.js"></script>
+    <script src="levels.js"></script>
+    <script src="audio.js"></script>
+    <script src="maze.js"></script>
+  </body>
+</html>
+
