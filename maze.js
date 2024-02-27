@@ -9,10 +9,10 @@ var height;
 
 var vertices = [];
 var polygons = [];
-var edges = [];
+var perimeter = [];
 
 var addVertex = function( v ) {
-  var thresh = 0.001;
+  var thresh = 0.01;
   var n = vertices.length;
   for( var i = 0; i < n; ++i ) {
     var u = vertices[ i ];
@@ -25,26 +25,39 @@ var addVertex = function( v ) {
   return n;
 };
 
-var addEdge = function( e ) {
-  var n = edges.length;
-  // use indexOf.
-  console.log( "Worky!" + e );
-  
-  console.log( edges.indexOf( e ) );
-  console.log( edges.indexOf( [ e[1], e[0] ] ) );
-
+var perimeterFind = function( e ) {
+  var n = perimeter.length;
+  // Requires 'deep' search.
   for( var i = 0; i < n; ++i ) {
-    if( edges[ i ] == e ) {
-      console.log( "Is this an error?" );
-      return;
-    }
-    if( edges[ i ] == [ e[1], e[0] ] ) {
-      console.log( "Remove item." );
-      edges.splice( i, 1 );
-      return;
+    if( equal( perimeter[ i ], e ) ) {
+      return i;
     }
   }
-  edges.push( e );
+  return -1;
+}
+
+var perimeterContains = function( e ) {
+  return perimeterFind( e ) != -1;
+}
+
+var perimeterRemove = function( e ) {
+  var i = perimeterFind( e );
+  if( i != -1 ) {
+    perimeter.splice( i, 1 );
+    return true;
+  } else {
+    return false;
+  }
+}
+
+var addEdge = function( e ) {
+  if( perimeterContains( e ) ) {
+    console.log( "Possible error?" );
+  } else if( perimeterRemove( swap( e ) ) ) {
+    console.log( "Remove item." );
+  } else {
+    perimeter.push( e );
+  }
 };
 
 var fillCanvas = function( ctx, col ) {
@@ -65,7 +78,7 @@ var resize = function() {
   draw();
 };
 
-var addEdges = function( p ) {
+var addPerimeter = function( p ) {
   var n = p.length;
   for( var i = 0; i < n - 1; ++i ) {
     addEdge( [ p[ i ], p[ i + 1 ] ] );
@@ -77,14 +90,22 @@ var addPolygon = function( n, x, y, r, t ) {
   var p = [];
   for( var i = 0; i < n; ++i ) {
     var u = i * Math.PI * 2 / n + t;
-    var a = x + Math.sin( u ) * r;
-    var b = y + Math.cos( u ) * r 
+    var a = x + Math.cos( u ) * r;
+    var b = y - Math.sin( u ) * r 
     p[ i ] = addVertex( [ a, b ] );
   }
 
-  addEdges( p );
+  addPerimeter( p );
 
   polygons.push( p );
+}
+
+var swap = function( a ) {
+  return [ a[1], a[0] ];
+}
+
+var equal = function( a, b ) {
+  return a[0] == b[0] && a[1] == b[1];
 }
 
 var perpendicular = function( a ) {
@@ -120,8 +141,8 @@ var norm = function( a ) {
 }
 
 var rotate = function( v, a ) {
-  var sa = Math.sin( a );
-  var ca = Math.cos( a );
+  var sa = Math.sin( -a );
+  var ca = Math.cos( -a );
   return [ v[0] * ca - v[1] * sa, v[0] * sa + v[1] * ca ];
 }
 
@@ -147,20 +168,41 @@ var addPolygonToEdge = function( n, a, b ) {
     p[ i ] = addVertex( x );
   }
 
-  addEdges( p );
+  addperimeter( p );
   polygons.push( p );
 }
 
-var addToPolygon = function( n, r, p ) {
+var addToPolygon = function( n, p ) {
   var polygon = polygons[ p ];
   var a = polygon[ 0 ];
   for( var i = 1; i < polygon.length; ++i ) {
     var b = polygon[ i ];
-    addPolygonToEdge( n, a, b, r );
+    addPolygonToEdge( n, b, a );
     a = b;
   }
-  addPolygonToEdge( n, a, polygon[ 0 ], r );
+  addPolygonToEdge( n, polygon[ 0 ], a );
 }
+
+var addToPerimeter = function( n ) {
+  var edges = [];
+  // Create deep copy of perimeter.
+  // Adding the polygons will edit the perimeter.
+  for( var e = 0; e < perimeter.length; ++e ) {
+    var edge = perimeter[e];
+    edges.push( [ edge[0], edge[1] ] );
+  }
+ 
+  // Perimeter edges removed by processing will be skipped.
+  for( var e = 0; e < edges.length; ++e ) {
+    var edge = edges[e];
+    if( !perimeterContains( edge ) ) {
+      console.log("REMOVED!")
+      continue;
+    }
+    addPolygonToEdge( n, edge[1], edge[0] );
+  }
+}
+
 
 var draw = function() {
   var halfWidth = width / 2;
@@ -183,14 +225,26 @@ var draw = function() {
     }
     ctx.closePath();
     ctx.stroke();
+
+    var indexLabels = false;
+    if( indexLabels )
+    {
+      ctx.fillStyle = '#dddddd';
+      ctx.font="20px Verdana"
+      for( var v = 0; v < polygon.length; ++v )
+      {
+        var point = vertices[ polygon[ v ] ];
+        ctx.fillText( v.toString(), point[0] + halfWidth + 5, point[1] + halfHeight + 5 );
+      }
+    }
   }
 
-  for( var e = 0; e < edges.length; ++e )
+  for( var e = 0; e < perimeter.length; ++e )
   {
     ctx.strokeStyle = '#dddddd';
-    ctx.lineWidth = 3.0;
+    ctx.lineWidth = 4.0;
     ctx.beginPath();
-    var edge = edges[ e ];
+    var edge = perimeter[ e ];
     var start = vertices[ edge[ 0 ] ];
     ctx.moveTo( start[0] + halfWidth, start[1] + halfHeight );
     var end = vertices[ edge[ 1 ] ];
@@ -201,10 +255,51 @@ var draw = function() {
 
 }
 
+// Hex + tri.
+/*
+addPolygon( 6, 0, 0, 50, 0.1 );
+addToPerimeter( 3 );
+addToPerimeter( 6 );
+addToPerimeter( 3 );
+addToPerimeter( 6 );
+addToPerimeter( 3 );
+addToPerimeter( 6 );
+*/
 
-addPolygon( 6, 0, 0, 100, 0 );
+// Hex + tri again.
+/*
+addPolygon( 3, 0, 0, 50, 0.1 );
+addToPerimeter( 6 );
+addToPerimeter( 3 );
+addToPerimeter( 6 );
+addToPerimeter( 3 );
+*/
 
-addToPolygon( 6, 100, 0 );
+// Square grid.
+/*
+addPolygon( 4, 0, 0, 50, 0 );
+addToPerimeter( 4 );
+addToPerimeter( 4 );
+addToPerimeter( 4 );
+*/
+
+// Triangles.
+/*
+addPolygon( 3, 0, 0, 50, 0 );
+addToPerimeter( 3 );
+addToPerimeter( 3 );
+addToPerimeter( 3 );
+addToPerimeter( 3 );
+addToPerimeter( 3 );
+*/
+
+// Hexagons.
+
+addPolygon( 6, 0, 0, 50, 0.1 );
+addToPerimeter( 6 );
+addToPerimeter( 6 );
+addToPerimeter( 6 );
+addToPerimeter( 6 );
 
 $(window).on( "resize", resize );
 
