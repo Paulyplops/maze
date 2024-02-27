@@ -7,11 +7,58 @@ var ctx = c.getContext('2d');
 var width;
 var height;
 
+// Array of coordinates [x,y].
 var vertices = [];
+// Array of polygon vertex indices [a,b,c...n].
 var polygons = [];
+// Array of edges on perimeter of tiling.
+// Each edge is a pair of vertex indices [a,b].
+// The edge is directed a->b.
+// Edges on the perimeter also have a polygon index attribute p.
 var perimeter = [];
+// Graph connectivity.
+// Each wall is a pair of vertex indices [a,b].
+// The edge is not directed, a is always less than b.
+// Walls also have two polygon index attributes p & q where p < q.
+var walls = [];
+
+var startPolygon;
+var endPolygon;
+
+var random = 0;
+
+// Von Neumann middle-square rand.
+// From seed s returns random-ish number between 0-1.
+
+var middleSquareRandom = function( s ) {
+  var t = ( s + 131071 ) * 524287;
+  var r =  ( t * t ) % 4093082899;
+  var u = r & 0x00ffff00;
+  var v = u >> 8;
+  return v / 65535.0;
+}
+
+// Returns n numbers in the random-ish number sequence seeded with s.
+
+var pseudoRandom = function() {
+  random = middleSquareRandom( random );
+  return random;
+}
+
+// Move random into closure!
+
+var seedPseudoRandom = function( s ) {
+  random = s;
+}
+
+
+var pseudoRandomSelect = function( v ) {
+  return v[ Math.floor( v.length * pseudoRandom() ) ];
+}
+
 
 var addVertex = function( v ) {
+  // When adding vertices we look for duplicates first.
   var thresh = 0.01;
   var n = vertices.length;
   for( var i = 0; i < n; ++i ) {
@@ -40,9 +87,11 @@ var perimeterContains = function( e ) {
   return perimeterFind( e ) != -1;
 }
 
+
 var perimeterRemove = function( e ) {
   var i = perimeterFind( e );
   if( i != -1 ) {
+    walls.push( makeWall( e[0], e[1], e.p, perimeter[i].p ) );
     perimeter.splice( i, 1 );
     return true;
   } else {
@@ -50,7 +99,7 @@ var perimeterRemove = function( e ) {
   }
 }
 
-var addEdge = function( e ) {
+var addEdgeToPerimeter = function( e ) {
   if( perimeterContains( e ) ) {
     console.log( "Possible error?" );
   } else if( perimeterRemove( swap( e ) ) ) {
@@ -78,12 +127,12 @@ var resize = function() {
   draw();
 };
 
-var addPerimeter = function( p ) {
-  var n = p.length;
+var addPolygonToPerimeter = function( polygon, p ) {
+  var n = polygon.length;
   for( var i = 0; i < n - 1; ++i ) {
-    addEdge( [ p[ i ], p[ i + 1 ] ] );
+    addEdgeToPerimeter( makeEdge( polygon[ i ], polygon[ i + 1 ], p ) );
   }
-  addEdge( [ p[ n - 1 ], p[ 0 ] ] );
+  addEdgeToPerimeter( makeEdge( polygon[ n - 1 ], polygon[ 0 ], p ) );
 };
 
 var addPolygon = function( n, x, y, r, t ) {
@@ -95,13 +144,39 @@ var addPolygon = function( n, x, y, r, t ) {
     p[ i ] = addVertex( [ a, b ] );
   }
 
-  addPerimeter( p );
+  addPolygonToPerimeter( p, polygons.length );
 
   polygons.push( p );
 }
 
-var swap = function( a ) {
-  return [ a[1], a[0] ];
+var makeWall = function( a, b, p, q ) {
+  if( a > b )
+  {
+    var c = a;
+    a = b;
+    b = c;
+  }
+
+  if( p > q )
+  {
+    var r = p;
+    p = q;
+    q = r;
+  }
+
+  return { 0:a, 1:b, p:p, q:q };
+};
+
+var makeEdge = function( a, b, p ) {
+  return { 0:a, 1:b, p:p };
+};
+
+var cloneEdge = function( e ) {
+  return { 0:e[0], 1:e[1], p:e.p };
+};
+
+var swap = function( e ) {
+  return { 0:e[1], 1:e[0], p:e.p };
 }
 
 var equal = function( a, b ) {
@@ -168,7 +243,7 @@ var addPolygonToEdge = function( n, a, b ) {
     p[ i ] = addVertex( x );
   }
 
-  addperimeter( p );
+  addPolygonToPerimeter( p, polygons.length );
   polygons.push( p );
 }
 
@@ -189,7 +264,7 @@ var addToPerimeter = function( n ) {
   // Adding the polygons will edit the perimeter.
   for( var e = 0; e < perimeter.length; ++e ) {
     var edge = perimeter[e];
-    edges.push( [ edge[0], edge[1] ] );
+    edges.push( cloneEdge( edge ) );
   }
  
   // Perimeter edges removed by processing will be skipped.
@@ -203,6 +278,69 @@ var addToPerimeter = function( n ) {
   }
 }
 
+var findStartAndEnd = function() {
+  var n = perimeter.length;
+  var startIndex = Math.floor( pseudoRandom() * n );
+  var endIndex = ( startIndex + Math.floor( n / 2 ) ) % n
+  startPolygon = perimeter[ startIndex ].p;
+  endPolygon = perimeter[ endIndex ].p;
+}
+
+// Wall indices for polygon p.
+
+var polygonWalls = function( p ) {
+  var w = [];
+  for( var i = 0; i < walls.length; ++i ) {
+    var wall = walls[i];
+    if( wall.p == p || wall.q == p ) {
+      w.push( i );
+    }
+  }
+  return w;
+}
+
+var otherPolygon = function( wall, p ) {
+  if( wall.p == p ) { 
+    return wall.q;
+  } else {
+    return wall.p;
+  }
+}
+
+var range = function( n ) {
+  var r = {};
+  for( var i = 0; i < n; ++i ) {
+    r[ i ] = true;
+  }
+  return r;
+}
+
+
+var buildMaze = function() {
+  var unvisited = range( polygons.length );
+  var p = startPolygon;
+  var visited = {};
+  var stack = [];
+  while( Object.keys( unvisited ).length ) {
+    // Update visited structures.
+    visited[ p ] = true;
+    delete unvisited[ p ];
+    stack.push( p );
+    var w = polygonWalls( p );
+    w = w.filter( function( i ){ return otherPolygon( walls[ i ], p ) in unvisited; } );
+    if( w.length && p != endPolygon ) {
+      var n = pseudoRandomSelect( w );
+      var q = otherPolygon( walls[ n ], p );
+      // Remove wall.
+      walls.splice( n, 1 );
+      p = q;
+    } else {
+      p = pseudoRandomSelect( stack );
+    }
+  }
+}
+
+
 
 var draw = function() {
   var halfWidth = width / 2;
@@ -212,10 +350,13 @@ var draw = function() {
 
   for( var p = 0; p < polygons.length; ++p )
   {
-    ctx.strokeStyle = '#dddddd';
-    ctx.lineWidth = 1.0;
-    ctx.beginPath();
     var polygon = polygons[p];
+    if( p == startPolygon ) {
+      ctx.fillStyle = '#dd6655';
+    } else {
+      ctx.fillStyle = '#888888';
+    }
+    ctx.beginPath();
     var start = vertices[ polygon[0] ];
     ctx.moveTo( start[0] + halfWidth, start[1] + halfHeight );
     for( var v = 0; v < polygon.length; ++v )
@@ -224,7 +365,7 @@ var draw = function() {
       ctx.lineTo( point[0] + halfWidth, point[1] + halfHeight );
     }
     ctx.closePath();
-    ctx.stroke();
+    ctx.fill();
 
     var indexLabels = false;
     if( indexLabels )
@@ -241,19 +382,36 @@ var draw = function() {
 
   for( var e = 0; e < perimeter.length; ++e )
   {
-    ctx.strokeStyle = '#dddddd';
+    var edge = perimeter[ e ];
+    if( edge.p != endPolygon )
+    {
+      ctx.strokeStyle = '#666666';
+      ctx.lineWidth = 6.0;
+      ctx.beginPath();
+      var start = vertices[ edge[ 0 ] ];
+      ctx.moveTo( start[0] + halfWidth, start[1] + halfHeight );
+      var end = vertices[ edge[ 1 ] ];
+      ctx.lineTo( end[0] + halfWidth, end[1] + halfHeight );
+      ctx.stroke();
+    }
+  }
+  
+  for( var e = 0; e < walls.length; ++e )
+  {
+    ctx.strokeStyle = '#666666';
     ctx.lineWidth = 4.0;
     ctx.beginPath();
-    var edge = perimeter[ e ];
+    var edge = walls[ e ];
     var start = vertices[ edge[ 0 ] ];
     ctx.moveTo( start[0] + halfWidth, start[1] + halfHeight );
     var end = vertices[ edge[ 1 ] ];
     ctx.lineTo( end[0] + halfWidth, end[1] + halfHeight );
     ctx.stroke();
   }
-
-
 }
+
+// Seed by level.
+seedPseudoRandom( 0 );
 
 // Hex + tri.
 /*
@@ -273,8 +431,8 @@ addToPerimeter( 6 );
 addToPerimeter( 3 );
 addToPerimeter( 6 );
 addToPerimeter( 3 );
+addToPerimeter( 6 );
 */
-
 // Square grid.
 /*
 addPolygon( 4, 0, 0, 50, 0 );
@@ -291,19 +449,28 @@ addToPerimeter( 3 );
 addToPerimeter( 3 );
 addToPerimeter( 3 );
 addToPerimeter( 3 );
+addToPerimeter( 3 );
+addToPerimeter( 3 );
+addToPerimeter( 3 );
 */
-
 // Hexagons.
-
 addPolygon( 6, 0, 0, 50, 0.1 );
 addToPerimeter( 6 );
 addToPerimeter( 6 );
 addToPerimeter( 6 );
 addToPerimeter( 6 );
+addToPerimeter( 6 );
+
+findStartAndEnd();
+buildMaze();
+
 
 $(window).on( "resize", resize );
 
 resize();
+
+
+
 
 
 
