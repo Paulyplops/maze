@@ -161,13 +161,7 @@ var generatePalette = function() {
     palette.primary[ i ] = rgbToHex( lshToRgb( [ 50, 20 + i * 10, h ] ) );
   }
 
-  h += 1.4;
-  palette.secondary = [];
-  for( var i = 0; i < n; ++i ) {
-    palette.secondary[ i ] = rgbToHex( lshToRgb( [ 50, 20 + i * 10, h ] ) );
-  }
-
-  h += 1.8;
+  h += 2.4;
   palette.highlight = rgbToHex( lshToRgb( [ 50, 80, h ] ) );
 
   return palette;
@@ -488,15 +482,18 @@ var pseudoRandomSelect = function( v ) {
 var buildMaze = function() {
   var unvisited = range( polygons.length );
   var p = startPolygon;
-  var stack = [ p ];
+  var path = [];
+  var stack = [];
   while( Object.keys( unvisited ).length ) {
     // Update visited structures.
     delete unvisited[ p ];
+    // Set of walls bordering unvisited areas.
     var w = polygonWalls( p );
     w = w.filter( function( i ){ return otherPolygon( walls[ i ], p ) in unvisited; } );
+    // If we have got to the finish, stop walking.
     if( w.length && p != endPolygon ) {
-      // Add to stack.
-      stack.push( p );
+      // Add to path.
+      path.push( p );
       var n = pseudoRandomSelect( w );
       var q = otherPolygon( walls[ n ], p );
       // Record link.
@@ -505,14 +502,26 @@ var buildMaze = function() {
       walls.splice( n, 1 );
       p = q;
     } else {
-      // Remove dead-end p from the stack.
-      stack.splice( stack.indexOf( p ), 1 );
-      if( stack.length ) {
-        // Pick an arbitrary point in the stack.
-        p = pseudoRandomSelect( stack );
+      // Remove dead-end p from the path.
+      path.splice( path.indexOf( p ), 1 );
+      if( path.length ) {
+        // Pick an arbitrary point in the path.
+        p = pseudoRandomSelect( path );
+        var i = path.indexOf( p ) + 1;
+        // Store chopped off bit.
+        stack = stack.concat( path.slice( i ) );
+        // Chop path back.
+        path.splice( i, path.length - i );
       } else {
-        // Pick from 'unvisited'.
-        p = pseudoRandomSelect( Object.keys( unvisited ) );
+        // We have run out of path.
+        if( stack.length ) {
+          // Pick an arbitrary point in the stack.
+          p = pseudoRandomSelect( stack );
+          stack.splice( stack.indexOf( p ), 1 );
+        } else {
+          // Pick from 'unvisited'.
+          p = pseudoRandomSelect( Object.keys( unvisited ) );
+        }
       }
     }
   }
@@ -651,7 +660,7 @@ var touchPathStart = function( t ) {
 var finished = function() {
   if( endPolygon == path[ path.length - 1 ] ) {
     level += 1;
-    loadLevel( level );
+    loadLevel( levels[ level ][ 0 ] );
   }
 }
 
@@ -772,6 +781,14 @@ var draw = function() {
     ctx.lineTo( end[0] * scale + halfWidth, end[1] * scale + halfHeight );
     ctx.stroke();
   }
+
+  var levelLabel = true;
+  if( levelLabel )
+  {
+    ctx.fillStyle = '#dddddd';
+    ctx.font="50px Verdana"
+    ctx.fillText( level.toString(), 55, 55 );
+  }
 }
 
 var loadLevel = function( l ) {
@@ -785,20 +802,21 @@ var loadLevel = function( l ) {
   dual = [];
 
   var type = Math.floor( pseudoRandom() * 4 );
-  var s = Math.floor( pseudoRandom() * 1 ) + 4;
+  var s = Math.floor( pseudoRandom() * 1 ) + 6;
   var r = pseudoRandom() * 3.14;
+  type = 0;
   switch( type ){
   case 0:
     // Square grid.
     addPolygon( 4, 0, 0, 50, r );
-    for( var i = 0; i < s + 2; ++i ) {
+    for( var i = 0; i < s; ++i ) {
       addToPerimeter( 4 );
     }
     break;
   case 1:
     // Triangles.
     addPolygon( 3, 0, 0, 50, r );
-    for( var i = 0; i < s + 4; ++i ) {
+    for( var i = 0; i < s; ++i ) {
       addToPerimeter( 3 );
     }
     break;
@@ -824,9 +842,132 @@ var loadLevel = function( l ) {
   buildMaze();
 
   palette = generatePalette();
+
+  var score = Math.min( scoreLevel( startPolygon, endPolygon ),
+                        scoreLevel( endPolygon, startPolygon ) * 1.0 );
+
+  return score;
 }
 
-loadLevel( level );
+var scoreLevel = function( start, end ) {
+  var backLinks = {};
+  backLinks[ start ] = -1;
+  var forwardLinks = {};
+  var queue = [ start ];
+ 
+  while( queue.length > 0 ) {
+    // Pop.
+    var q = queue[0];
+    queue.splice(0,1);
+    // Add neighbours.
+    var w = polygonDual( q );
+    for( var k = 0; k < w.length; ++k ) {
+      var other = otherPolygon( dual[ w[ k ] ], q );
+      if(other in backLinks ) {
+        // A cycle?
+      } else {
+        // Record the links.
+        backLinks[ other ] = q;
+        if( q in forwardLinks ) {
+          forwardLinks[ q ].push( other );
+        } else {
+          forwardLinks[ q ] = [ other ];
+        }
+        // Add to the items to explore.
+        queue.push( other );
+      }
+    }
+  }
+
+  var terribleScore = -1;
+  // Length of solution.
+  var steps = 1;
+  // Number of wrong paths.
+  var junctions = 0;
+  // Sum of wrong path length squared times length to finish squared.
+  // Favour long wrong paths that branch early.
+  var score = 0;
+  // Iterator.
+  var i = end;
+  // Iterator - 1.
+  var j = -1;
+  while( i != -1 )
+  {
+    if( i in backLinks ) {
+      if( i in forwardLinks ) {
+        for( var b= 0; b < forwardLinks[ i ].length; ++b ) {
+          var branch = forwardLinks[ i ][ b ];
+          if( branch == i || branch == j ) continue;
+          junctions++;
+          var depth = function( k ) {
+            var m = 0;
+            if( k in forwardLinks ) {
+              for( var l = 0; l < forwardLinks[ k ].length; ++l ) {
+                m = Math.max( m, depth( forwardLinks[ k ][ l ] ) + 1 );
+              }
+            }
+            return m;
+          };
+          var d = depth( branch ) + 1;
+          // The length of the wrong path * the length of the correct path from
+          // the junction.
+          // The theory is long branches close to the exit are not interesting.
+          score += ( d * steps );
+          // console.log( "Depth: " + d, "Steps: " + steps );
+        }
+      }
+      // Length of wrong path.
+      j = i;
+      i = backLinks[ i ];
+      steps++;
+    } else {
+      // Impossible!
+      return terribleScore;
+    }
+  }
+
+  // Is the solution too direct to be interesting?
+  var mazeDiameter = Math.sqrt( polygons.length );
+  if( steps < mazeDiameter * 2.0 ){
+    return -1;
+  }
+
+  // Prefer longer paths.
+  score += steps * steps;
+  // console.log( "Steps: " + steps );
+  // console.log( "Junctions: " + junctions );
+  // console.log( "Score: " + score );
+  return score;
+}
+
+var levels = [];
+
+
+var levelCount = 100;
+
+if( levels.length == 0 ) {
+  for( var l = 0; l < levelCount; ++l ) {
+    var s = loadLevel( l );
+    if( s != -1 ) {
+      levels.push( [l,s] );
+    }
+  }
+
+  levels = levels.sort( function( a, b ){ return a[1] - b[1]; } );
+
+  var str = "levels = [";
+  var comma = " ";
+  for( var l = 0; l < levels.length; ++l ) {
+    str += " ["+ levels[l] + "],";
+  }
+  str = str.substring( 0, str.length - 1 );
+  str += " ];";
+  console.log( str );
+  console.log( "// Level " + levels.length + " of " + levelCount );
+}
+
+
+loadLevel( levels[ level ][ 0 ] );
 
 $(window).on( "resize", resize );
 
@@ -893,6 +1034,37 @@ $("#c").on( "mouseup", function( e ) {
   }
 });
 
+
+$(document).on( "keydown", function( e ){
+  switch(e.which) {
+  case 37: // left
+    if( level > 0 ) {
+      level--;
+      loadLevel( levels[ level ][ 0 ] );
+      draw();
+    }
+    break;
+
+  case 38: // up
+    break;
+
+  case 39: // right
+    if( level + 1 < levels.length ) {
+      level++;
+      loadLevel( levels[ level ][ 0 ] );
+      draw();
+    }
+    break;
+
+  case 40: // down
+    break;
+
+    default: return; // exit this handler for other keys
+  }
+  e.preventDefault();
+} );
+
+
 // Trigger initial draw.
 resize();
 
@@ -928,12 +1100,7 @@ var drawPalette = function( palette, j ) {
             palette.primary[1],
             palette.primary[2],
             palette.primary[3],
-            palette.primary[4],
-            palette.secondary[0],
-            palette.secondary[1],
-            palette.secondary[2],
-            palette.secondary[3],
-            palette.secondary[4] ];
+            palette.primary[4] ];
 
   for( var i = 0; i < p.length; ++i )
   {
