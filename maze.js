@@ -2,12 +2,19 @@
 var background = "#aaaaaa";
 
 var c = document.getElementById('c');
-var ctx = c.getContext('2d');
+
+var ctx1 = null;
+
+if( c ) ctx1 = c.getContext('2d');
 
 // Display dimensions [w,h] in pixels.
 var displayDimensions = [];
 // Maze dimensions [w,h] in maze units.
 var mazeDimensions = [];
+// Canvas dimensions.
+var canvasDimensions = [];
+// Half canvas dimensions.
+var halfDimensions = [];
 
 // Array of coordinates [x,y].
 var vertices = [];
@@ -25,8 +32,8 @@ var walls = [];
 // Graph connectivity.
 var dual = [];
 
-var startPolygon;
-var endPolygon;
+var startPolygon = -1;
+var endPolygon = -1;
 
 var random = 0;
 
@@ -37,6 +44,18 @@ var path = [];
 var palette;
 
 var level = 0;
+
+var dpr = window.devicePixelRatio;
+
+var lastTouched = -1;
+
+var lastTime = (new Date).getTime();
+var elapsedTime = 0;
+var startTime;
+
+var levelTime = 30000;
+
+var levelsCompleted = {};
 
 // Von Neumann middle-square rand.
 // From seed s returns random-ish number between 0-1.
@@ -62,6 +81,18 @@ var seedPseudoRandom = function( s ) {
   random = s;
 }
 
+// shim layer with setTimeout fallback.
+
+window.requestAnimFrame = (function(){
+  return  window.requestAnimationFrame       ||
+          window.webkitRequestAnimationFrame ||
+          window.mozRequestAnimationFrame    ||
+          function( callback ){
+            window.setTimeout(callback, 1000 / 60);
+          };
+})();
+
+// Convert [r,g,b] to #rrggbb hex format.
 
 var rgbToHex = function( c ) {
   var clamp = function( c ) {
@@ -222,17 +253,53 @@ var addEdgeToPerimeter = function( e ) {
 var fillCanvas = function( ctx, col ) {
   ctx.fillStyle = col;  
   ctx.beginPath();  
-  ctx.rect( 0, 0, displayDimensions[0], displayDimensions[1] );  
+  ctx.rect( 0, 0, canvasDimensions[0], canvasDimensions[1] );  
   ctx.closePath();  
   ctx.fill(); 
 };
 
+var iOS = function() {
+  var iDevice = ['iPad', 'iPhone', 'iPod'];
+  return iDevice.indexOf( navigator.platform ) != -1;
+}
+
+var isMobile = function() {
+  return navigator.userAgent.match(/Android/i)
+      || navigator.userAgent.match(/webOS/i)
+      || navigator.userAgent.match(/iPhone/i)
+      || navigator.userAgent.match(/iPad/i)
+      || navigator.userAgent.match(/iPod/i);
+}
+
 var resize = function() {
-  // Viewport constrained by height.
-  displayDimensions[0] = $(window).width();
-  displayDimensions[1] = $(window).height();
-  c.width = displayDimensions[0];
-  c.height = displayDimensions[1];
+  if( isMobile() ) {
+    // Viewport constrained by height.
+    displayDimensions[0] = $(window).width();
+    displayDimensions[1] = $(window).height();
+  }
+  else
+  {
+    // On web use arbitrary size.
+    displayDimensions[0] = 600;
+    displayDimensions[1] = 600;
+    // Centre.
+
+  }
+
+  if( iOS() ) {
+    // Canvas should have a higher density for iOS devices.
+    // On android width and height have density already built in.
+    canvasDimensions = mult( displayDimensions, dpr );
+  } else {
+    canvasDimensions = displayDimensions;
+  }
+
+  halfDimensions = div( canvasDimensions, 2.0 );
+
+  if( c ) {
+    c.width = canvasDimensions[0];
+    c.height = canvasDimensions[1];
+  }
 
   draw();
 };
@@ -275,6 +342,34 @@ var polygonContains = function( x, p ) {
   }
   return inside;
 }
+
+// Perform a binary search to find the position in the array.
+
+function binarySearch( searchElement, searchArray, fn ) {
+  var stop = searchArray.length;
+  var last;
+  var p = 0;
+  var delta = 0;
+
+  do {
+    last = p;
+    var c = fn( searchArray[p], searchElement );
+    if( c > 0 ) {
+      stop = p + 1;
+      p -= delta;
+    } else if ( c == 0 ) {
+      // FOUND A MATCH!
+      return p;
+    }
+
+    delta = Math.floor( (stop - p) / 2 );
+    p += delta; // if delta = 0, p is not modified and loop exits.
+
+  } while( last !== p );
+
+  return -1; //nothing found
+};
+
 
 var makeWall = function( a, b, p, q ) {
   if( a > b )
@@ -352,26 +447,45 @@ var dist = function( a, b ) {
   return len( sub( a, b ) );
 }
 
-// a & b are the vertices.
+var inside = function( x, a, b ) {
+  return x[0] > a[0] && 
+         x[1] > a[1] &&
+         x[0] < b[0] && 
+         x[1] < b[1];
+}
+
+// a & b are the vertices that make up the edge to add to.
+// Returns false if the polygon extends beyond the display.
 
 var addPolygonToEdge = function( n, a, b ) {
   var l = vertices.length;
 
   var va = vertices[ a ];
   var vb = vertices[ b ];
-  var v = sub( vb, va );
+  var vd = sub( vb, va );
   var d = Math.PI * 2 / n;
   var x = vb;
   var p = [ a, b ];
+  var v = [];
+  var border = 0.9;
+  var lower = mult( halfDimensions, -border );
+  var upper = mult( halfDimensions, border );
 
   for( var i = 2; i < n; ++i ) {
-    var v = rotate( v, d );
-    x = add( x, v );
-    p[ i ] = addVertex( x );
+    var vd = rotate( vd, d );
+    x = add( x, vd );
+    if( !inside( x, lower, upper ) )
+        return false;
+    v[ i ] = x;
+  }
+
+  for( var i = 2; i < n; ++i ) {
+    p[ i ] = addVertex( v[ i ] );
   }
 
   addPolygonToPerimeter( p, polygons.length );
   polygons.push( p );
+  return true;
 }
 
 // Adds polygon with n sides to every edge of polygon p.
@@ -390,6 +504,7 @@ var addToPolygon = function( n, p ) {
 // Adds polygons side n to each edge of the perimeter.
 
 var addToPerimeter = function( n ) {
+  var added = false;
   var edges = [];
   // Create deep copy of perimeter.
   // Adding the polygons will edit the perimeter.
@@ -405,17 +520,44 @@ var addToPerimeter = function( n ) {
       // Removed.
       continue;
     }
-    addPolygonToEdge( n, edge[1], edge[0] );
+    added = addPolygonToEdge( n, edge[1], edge[0] ) || added;
   }
+
+  return added;
 }
 
 // Locate maze entrance and exit.
-// BUG: start and end might not be connected!
+// Start and end might not be connected!
+// This is tested when the level is scored.
 
 var findStartAndEnd = function() {
   var n = perimeter.length;
   var startIndex = Math.floor( pseudoRandom() * n );
-  var endIndex = ( startIndex + Math.floor( n / 2 ) ) % n
+  var endIndex = ( startIndex + Math.floor( n / 2 ) ) % n;
+  // Sort perimeter radially.
+  // Not completely convinced this is right.
+  /* 
+  perimeter.sort( function( a, b ){
+    // Mid point of perimeter edge.
+    var va = mult( add( vertices[ a[ 0 ] ], vertices[ a[ 1 ] ] ), 0.5 );
+    var vb = mult( add( vertices[ b[ 0 ] ], vertices[ b[ 1 ] ] ), 0.5 );
+    // Angle difference.
+    return Math.atan2( va[ 0 ], va[ 1 ] ) - Math.atan2( vb[ 0 ], vb[ 1 ] );
+  } );
+  */
+
+  // Sort perimeter, and then re-order into continuous loop.
+  var fn = function( a, b ){ return a[ 0 ] - b[ 0 ] };
+  perimeter.sort( fn );
+  var ordered = [];
+  var j = 0;
+  for( var i = 0; i < perimeter.length; ++i ) {
+    var p = perimeter[ j ];
+    ordered.push( p );
+    j = binarySearch( [ p[1], p[0] ], perimeter, fn );
+  }
+  perimeter = ordered;
+
   startPolygon = perimeter[ startIndex ].p;
   endPolygon = perimeter[ endIndex ].p;
   path = [ startPolygon ];
@@ -534,7 +676,9 @@ var walk = function( p ) {
   // Change this to walk from the end of the path.
   var link = {};
   link[p] = -1;
-  for( var i = 0; i < 2; ++i ) {
+  // How far are we prepared to walk.
+  var distance = 2;
+  for( var i = 0; i < distance; ++i ) {
     var keys = Object.keys( link );
     for( var j = 0; j < keys.length; ++j ) {
       var q = Math.floor( keys[j] );
@@ -583,13 +727,13 @@ var walk = function( p ) {
   return false;
 }
 
-var findPolygonTouched = function( t ) {
-  var halfWidth = displayDimensions[0] / 2;
-  var halfHeight = displayDimensions[1] / 2;
-  var scale = Math.min( displayDimensions[0] / mazeDimensions[0],
-                        displayDimensions[1] / mazeDimensions[1] );
 
-  var point = [ ( t[0] - halfWidth ) / scale, ( t[1] - halfHeight ) / scale ];
+
+
+var findPolygonTouched = function( t ) {
+  var scale = 1;
+
+  var point = [ ( t[0] - halfDimensions[0] ) / scale, ( t[1] - halfDimensions[1] ) / scale ];
   
   for( var p = 0; p < polygons.length; ++p ) {
     if( polygonContains( point, p ) ) {
@@ -602,6 +746,7 @@ var findPolygonTouched = function( t ) {
 
 var touchPath = function( t ) {
   var p = findPolygonTouched( t );
+  lastTouched = p;
   var changed = false;
   if( p != -1 ) {
     var index = path.indexOf( p );
@@ -627,6 +772,7 @@ var touchPath = function( t ) {
   }
   */
 
+  changed = true;
   if( changed ) {
     finished();
     draw();
@@ -637,6 +783,7 @@ var touchPath = function( t ) {
 
 var touchPathStart = function( t ) {
   var p = findPolygonTouched( t );
+  lastTouched = p;
   var changed = false;
   if( p != -1 ) {
     var index = path.indexOf( p );
@@ -651,6 +798,7 @@ var touchPathStart = function( t ) {
     }
   }
 
+  changed = true;
   if( changed ) {
     finished();
     draw();
@@ -658,8 +806,29 @@ var touchPathStart = function( t ) {
 }
 
 var finished = function() {
+  // Are we at the end?
   if( endPolygon == path[ path.length - 1 ] ) {
-    level += 1;
+    levelsCompleted[ level ] = true;
+    // Can be negative when the timer has expired.
+    var remainingTime = levelTime - elapsedTime;
+    var remainingTimeInSeconds = Math.floor( remainingTime / 1000 ); 
+
+    var searchWidth = 100;
+    // Jump ahead by number of seconds remaining.
+    // Search for a untried level around here.
+    for( var i = 0; i < searchWidth; ++i )
+    {
+      var o = Math.floor( i / 2 ) * ( i % 2 * 2 - 1 );
+      var l = level + remainingTimeInSeconds + o;
+      l = Math.min( Math.max( 0, l ), levels.length - 1 );
+      if( !( l in levelsCompleted ) )
+      {
+        level = l;
+        break;
+      }
+    }
+    
+    // Load target level.
     loadLevel( levels[ level ][ 0 ] );
   }
 }
@@ -682,60 +851,57 @@ var calculateMazeDimensions = function() {
   return dimensions;
 };
 
+var polygonMiddle = function( polygon ) {
+  var mean = [0,0];
+    
+  for( var v = 0; v < polygon.length; ++v )
+  {
+    var point = vertices[ polygon[ v ] ];
+    mean = add( point, mean );
+  }
 
-var draw = function() {
-  var halfWidth = displayDimensions[0] / 2;
-  var halfHeight = displayDimensions[1] / 2;
+  mean = div( mean, polygon.length + 0.0 );
 
-  var scale = Math.min( displayDimensions[0] / mazeDimensions[0],
-                        displayDimensions[1] / mazeDimensions[1] );
+  return mean;
+}
 
+var drawPolygons = function( ctx, scale ) {
+
+  // Clear.
   fillCanvas( ctx, background );
 
   // Draw oversized finish polygon.
+  if( endPolygon != -1 )
   {
     var polygon = polygons[ endPolygon ];
     var massive = 1.5;
 
-    var mean = [0,0];
-      
-    for( var v = 0; v < polygon.length; ++v )
-    {
-      var point = vertices[ polygon[ v ] ];
-      mean = add( point, mean );
-    }
-
-    mean = div( mean, polygon.length + 0.0 );
+    var mean = polygonMiddle( polygon );
 
     ctx.fillStyle = palette.highlight;
     ctx.beginPath();
     var start = add( mult( sub( vertices[ polygon[0] ], mean ), massive ), mean );
-    ctx.moveTo( start[0] * scale + halfWidth, start[1] * scale + halfHeight );
+    ctx.moveTo( start[0] * scale + halfDimensions[0], start[1] * scale + halfDimensions[1] );
     for( var v = 0; v < polygon.length; ++v )
     {
       var point = add( mult( sub( vertices[ polygon[v] ], mean ), massive ), mean );
-      ctx.lineTo( point[0] * scale + halfWidth, point[1] * scale + halfHeight );
+      ctx.lineTo( point[0] * scale + halfDimensions[0], point[1] * scale + halfDimensions[1] );
     }
     ctx.closePath();
     ctx.fill();
   }
 
+  ctx.fillStyle = palette.primary[ 0 ];
   for( var p = 0; p < polygons.length; ++p )
   {
     var polygon = polygons[p];
-    // Is the polygon in the current path.
-    if( path.indexOf( p ) != -1 ) {
-      ctx.fillStyle = palette.highlight;
-    } else {
-      ctx.fillStyle = palette.primary[ p % palette.primary.length ];
-    }
     ctx.beginPath();
     var start = vertices[ polygon[0] ];
-    ctx.moveTo( start[0] * scale + halfWidth, start[1] * scale + halfHeight );
+    ctx.moveTo( start[0] * scale + halfDimensions[0], start[1] * scale + halfDimensions[1] );
     for( var v = 0; v < polygon.length; ++v )
     {
       var point = vertices[ polygon[ v ] ];
-      ctx.lineTo( point[0] * scale + halfWidth, point[1] * scale + halfHeight );
+      ctx.lineTo( point[0] * scale + halfDimensions[0], point[1] * scale + halfDimensions[1] );
     }
     ctx.closePath();
     ctx.fill();
@@ -748,40 +914,67 @@ var draw = function() {
       for( var v = 0; v < polygon.length; ++v )
       {
         var point = vertices[ polygon[ v ] ];
-        ctx.fillText( v.toString(), point[0] * scale + halfWidth + 5, point[1] * scale + halfHeight + 5 );
+        ctx.fillText( v.toString(), point[0] * scale + halfDimensions[0] + 5, point[1] * scale + halfDimensions[1] + 5 );
       }
     }
   }
+}
 
+var drawPath = function( ctx, scale ) {
+  ctx.fillStyle = palette.highlight;
+  for( var p = 0; p < path.length; ++p )
+  {
+    var polygon = polygons[ path[ p ] ];
+    ctx.beginPath();
+    var start = vertices[ polygon[0] ];
+    ctx.moveTo( start[0] * scale + halfDimensions[0], start[1] * scale + halfDimensions[1] );
+    for( var v = 0; v < polygon.length; ++v )
+    {
+      var point = vertices[ polygon[ v ] ];
+      ctx.lineTo( point[0] * scale + halfDimensions[0], point[1] * scale + halfDimensions[1] );
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+
+var drawWalls = function( ctx, scale ) {
+  // The perimeter.
+  ctx.strokeStyle = palette.dark;
+  ctx.lineWidth = 6.0;
+  ctx.beginPath();
   for( var e = 0; e < perimeter.length; ++e )
   {
     var edge = perimeter[ e ];
     if( edge.p != endPolygon )
     {
-      ctx.strokeStyle = palette.dark;
-      ctx.lineWidth = 6.0;
-      ctx.beginPath();
       var start = vertices[ edge[ 0 ] ];
-      ctx.moveTo( start[0] * scale + halfWidth, start[1] * scale + halfHeight );
+      ctx.moveTo( start[0] * scale + halfDimensions[0], start[1] * scale + halfDimensions[1] );
       var end = vertices[ edge[ 1 ] ];
-      ctx.lineTo( end[0] * scale + halfWidth, end[1] * scale + halfHeight );
-      ctx.stroke();
+      ctx.lineTo( end[0] * scale + halfDimensions[0], end[1] * scale + halfDimensions[1] );
     }
   }
+  ctx.stroke();
   
+  // Walls.
+  ctx.strokeStyle = palette.dark;
+  ctx.lineWidth = 4.0;
+  ctx.beginPath();
   for( var e = 0; e < walls.length; ++e )
   {
-    ctx.strokeStyle = palette.dark;
-    ctx.lineWidth = 4.0;
-    ctx.beginPath();
     var edge = walls[ e ];
     var start = vertices[ edge[ 0 ] ];
-    ctx.moveTo( start[0] * scale + halfWidth, start[1] * scale + halfHeight );
+    ctx.moveTo( start[0] * scale + halfDimensions[0], start[1] * scale + halfDimensions[1] );
     var end = vertices[ edge[ 1 ] ];
-    ctx.lineTo( end[0] * scale + halfWidth, end[1] * scale + halfHeight );
-    ctx.stroke();
+    ctx.lineTo( end[0] * scale + halfDimensions[0], end[1] * scale + halfDimensions[1] );
   }
+  ctx.stroke();
 
+}
+
+var drawDebug = function( ctx, scale ) {
+ 
   var levelLabel = true;
   if( levelLabel )
   {
@@ -789,6 +982,76 @@ var draw = function() {
     ctx.font="50px Verdana"
     ctx.fillText( level.toString(), 55, 55 );
   }
+
+  // The dual is the paths between the polygons.
+  var drawDual = false;
+  if( drawDual ) {
+
+    for( var d = 0; d < dual.length; ++d ) {
+      var mp = polygonMiddle( polygons[ dual[d].p ] );
+      var mq = polygonMiddle( polygons[ dual[d].q ] );
+      
+      ctx.strokeStyle = palette.dark;
+      ctx.lineWidth = 1.0;
+      ctx.beginPath();
+      ctx.moveTo( mp[0] * scale + halfDimensions[0], mp[1] * scale + halfDimensions[1] );
+      ctx.lineTo( mq[0] * scale + halfDimensions[0], mq[1] * scale + halfDimensions[1] );
+      ctx.stroke();
+ 
+    }
+  }
+
+  var drawLastTouched = false;
+  if( drawLastTouched && lastTouched != -1 ) {
+
+    var polygon = polygons[ lastTouched ];
+    // Is the polygon in the current path.
+    ctx.strokeStyle = palette.highlight;
+    ctx.lineWidth = 4.0;
+    ctx.beginPath();
+    var start = vertices[ polygon[0] ];
+    ctx.moveTo( start[0] * scale + halfDimensions[0], start[1] * scale + halfDimensions[1] );
+    for( var v = 0; v < polygon.length; ++v )
+    {
+      var point = vertices[ polygon[ v ] ];
+      ctx.lineTo( point[0] * scale + halfDimensions[0], point[1] * scale + halfDimensions[1] );
+    }
+    ctx.closePath();
+    ctx.stroke();
+
+  }
+}
+
+var drawOverlay = function( ctx, scale ) {
+  // Timer clock.
+  var n = 50;
+  var m = n * 1.0 * elapsedTime / levelTime;
+  var r = 50;
+  ctx.strokeStyle = "#dddddd";;
+  ctx.lineWidth = 4.0;
+  ctx.beginPath();
+  ctx.moveTo( Math.cos( 0 ) * r + halfDimensions[0], Math.sin( 0 ) * r + halfDimensions[1] );
+  for( var i = 1; i < Math.floor( m ); ++i ) {
+    var u = i * Math.PI * 2 / n;
+    ctx.lineTo( Math.cos( u ) * r + halfDimensions[0], Math.sin( u ) * r + halfDimensions[1] );
+  }
+  var u = m * Math.PI * 2 / n;
+  ctx.lineTo( Math.cos( u ) * r + halfDimensions[0], Math.sin( u ) * r + halfDimensions[1] );
+  ctx.stroke();
+}
+
+var draw = function() {
+  var scale = 1;
+
+  if( !ctx1 ) return;
+
+  if( !palette ) return;
+
+  drawPolygons( ctx1, scale );
+  drawPath( ctx1, scale );
+  drawWalls( ctx1, scale );
+  drawDebug( ctx1, scale );  
+  drawOverlay( ctx1, scale );
 }
 
 var loadLevel = function( l ) {
@@ -801,38 +1064,45 @@ var loadLevel = function( l ) {
   walls = [];
   dual = [];
 
-  var type = Math.floor( pseudoRandom() * 4 );
-  var s = Math.floor( pseudoRandom() * 1 ) + 6;
+  lastTouched = -1;
+
+  var type = Math.floor( pseudoRandom() * 3 );
+  var s = Math.floor( pseudoRandom() * 20 ) + 20;
   var r = pseudoRandom() * 3.14;
-  type = 0;
+
   switch( type ){
   case 0:
     // Square grid.
-    addPolygon( 4, 0, 0, 50, r );
-    for( var i = 0; i < s; ++i ) {
-      addToPerimeter( 4 );
+    addPolygon( 4, 0, 0, s * dpr, r );
+    var more = true;
+    while( more ) {
+      more = addToPerimeter( 4 );
     }
     break;
   case 1:
     // Triangles.
-    addPolygon( 3, 0, 0, 50, r );
-    for( var i = 0; i < s; ++i ) {
-      addToPerimeter( 3 );
+    addPolygon( 3, 0, 0, s * dpr, r );
+    var more = true;
+    while( more ) {
+      more = addToPerimeter( 3 );
     }
     break;
   case 2:
     // Hexagons.
-    addPolygon( 6, 0, 0, 50, r );
-    for( var i = 0; i < s; ++i ) {
-      addToPerimeter( 6 );
+    addPolygon( 6, 0, 0, s * dpr, r );
+    var more = true;
+    while( more ) {
+      more = addToPerimeter( 6 );
     }
     break;
   case 3:
     // Hex + tri.
-    addPolygon( 6, 0, 0, 50, r );
-    for( var i = 0; i < s; ++i ) {
-      addToPerimeter( 3 );
-      addToPerimeter( 6 );
+    // Doesn't really work.
+    addPolygon( 6, 0, 0, s * dpr, r );
+    var more = true;
+    for( var i = 0; i < 8; ++i ) {
+      more = more && addToPerimeter( 3 );
+      more = more && addToPerimeter( 6 );
     }
     break;
   }
@@ -845,6 +1115,10 @@ var loadLevel = function( l ) {
 
   var score = Math.min( scoreLevel( startPolygon, endPolygon ),
                         scoreLevel( endPolygon, startPolygon ) * 1.0 );
+
+  startTime = (new Date).getTime();
+  lastTime = (new Date).getTime();
+  elapsedTime = 0;
 
   return score;
 }
@@ -940,60 +1214,75 @@ var scoreLevel = function( start, end ) {
   return score;
 }
 
-var levels = [];
+var advanceGame = function() {
+  
+  var now = (new Date).getTime();
+  var step = now - lastTime;
 
+  elapsedTime = now - startTime;
+  draw();
 
-var levelCount = 100;
-
-if( levels.length == 0 ) {
-  for( var l = 0; l < levelCount; ++l ) {
-    var s = loadLevel( l );
-    if( s != -1 ) {
-      levels.push( [l,s] );
-    }
-  }
-
-  levels = levels.sort( function( a, b ){ return a[1] - b[1]; } );
-
-  var str = "levels = [";
-  var comma = " ";
-  for( var l = 0; l < levels.length; ++l ) {
-    str += " ["+ levels[l] + "],";
-  }
-  str = str.substring( 0, str.length - 1 );
-  str += " ];";
-  console.log( str );
-  console.log( "// Level " + levels.length + " of " + levelCount );
+  lastTime = now;
 }
 
 
-loadLevel( levels[ level ][ 0 ] );
+var advance = function() {
+  requestAnimFrame( advance );
+  
+  advanceGame();
+}
+
+
+
+
+
+
+resize();
+
+advance();
+
+
+// If we have not computed the levels for this dimension we simply show the 
+// dimensions.
+if( ! ( canvasDimensions in allLevels ) ) {
+  $("body").html( "<body><p><code>" + canvasDimensions + "</code></p></body>" );
+};
+
+var diagnostics = function() {
+  $("body").html( "<body><p><code>Compute</code></p></body>" );
+}
+
+if( canvasDimensions in allLevels )
+{
+  var levels = allLevels[ canvasDimensions ];
+  loadLevel( levels[ level ][ 0 ] );
+}
 
 $(window).on( "resize", resize );
 
-$("#c").on( "touchstart", function( e ) {
+$(window).on( "touchstart", function( e ) {
   e.preventDefault();
   if( e.originalEvent.touches.length == 1 )
   {
-    touch = [ e.originalEvent.touches[0].pageX,
-              e.originalEvent.touches[0].pageY ];
+    touch = [ e.originalEvent.touches[0].pageX - $("#c").offset().left,
+              e.originalEvent.touches[0].pageY - $("#c").offset().top ];
     touchPathStart( touch, true );
     return false;
   }
 });
 
-$("#c").on( "touchmove", function( e ) {
+$(window).on( "touchmove", function( e ) {
   e.preventDefault();
   if( e.originalEvent.touches.length > 0 && touch )
   {
-    touch = [ e.originalEvent.touches[0].pageX,
-              e.originalEvent.touches[0].pageY ];
+    touch = [ e.originalEvent.touches[0].pageX - $("#c").offset().left,
+              e.originalEvent.touches[0].pageY - $("#c").offset().top ];
     touchPath( touch );
     return false;
   }
 });
 
-$("#c").on( "touchend", function( e ) {
+$(window).on( "touchend", function( e ) {
   e.preventDefault();
   if( e.originalEvent.touches.length == 0 && touch )
   {
@@ -1002,31 +1291,31 @@ $("#c").on( "touchend", function( e ) {
   }
 });
 
-$("#c").on( "mousedown", function( e ) {
-  if( e.originalEvent.button == 0 )
+$(window).on( "mousedown", function( e ) {
+  if( e.originalEvent.button == 0 && $("#c").length != 0 )
   {
     e.preventDefault();
-    touch = [ e.pageX,
-              e.pageY ];
+    touch = [ e.pageX - $("#c").offset().left,
+              e.pageY - $("#c").offset().top ];
     touchPathStart( touch, true );
     return false;
   }
 });
 
-$("#c").on( "mousemove", function( e ) {
-  if( touch )
+$(window).on( "mousemove", function( e ) {
+  if( touch && $("#c").length != 0 )
   {
     e.preventDefault();
-    touch = [ e.pageX,
-              e.pageY ];
+    touch = [ e.pageX - $("#c").offset().left,
+              e.pageY - $("#c").offset().top ];
     touchPath( touch );
     return false;
   }
 });
 
 
-$("#c").on( "mouseup", function( e ) {
-  if( e.originalEvent.button == 0 )
+$(window).on( "mouseup", function( e ) {
+  if( e.originalEvent.button == 0 && $("#c").length != 0 ) 
   {
     e.preventDefault();
     touch = undefined;
@@ -1034,6 +1323,8 @@ $("#c").on( "mouseup", function( e ) {
   }
 });
 
+var secret = "C0MPUTE";
+var secretPos = 0;
 
 $(document).on( "keydown", function( e ){
   switch(e.which) {
@@ -1059,14 +1350,24 @@ $(document).on( "keydown", function( e ){
   case 40: // down
     break;
 
-    default: return; // exit this handler for other keys
+    default: 
+    var c = secret.charCodeAt( secretPos ); 
+    if( e.which == c ) 
+      secretPos++;
+    else
+      secretPos = 0;
+    if( secretPos == secret.length )
+      diagnostics();
+   
+    return; // exit this handler for other keys
   }
+
   e.preventDefault();
 } );
 
 
 // Trigger initial draw.
-resize();
+draw();
 
 var failure = "";
 
