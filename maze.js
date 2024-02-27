@@ -9,6 +9,43 @@ var height;
 
 var vertices = [];
 var polygons = [];
+var edges = [];
+
+var addVertex = function( v ) {
+  var thresh = 0.001;
+  var n = vertices.length;
+  for( var i = 0; i < n; ++i ) {
+    var u = vertices[ i ];
+    if( dist( v, u ) < thresh ) {
+      return i;
+    };
+  };
+
+  vertices.push( v );
+  return n;
+};
+
+var addEdge = function( e ) {
+  var n = edges.length;
+  // use indexOf.
+  console.log( "Worky!" + e );
+  
+  console.log( edges.indexOf( e ) );
+  console.log( edges.indexOf( [ e[1], e[0] ] ) );
+
+  for( var i = 0; i < n; ++i ) {
+    if( edges[ i ] == e ) {
+      console.log( "Is this an error?" );
+      return;
+    }
+    if( edges[ i ] == [ e[1], e[0] ] ) {
+      console.log( "Remove item." );
+      edges.splice( i, 1 );
+      return;
+    }
+  }
+  edges.push( e );
+};
 
 var fillCanvas = function( ctx, col ) {
   ctx.fillStyle = col;  
@@ -28,16 +65,25 @@ var resize = function() {
   draw();
 };
 
+var addEdges = function( p ) {
+  var n = p.length;
+  for( var i = 0; i < n - 1; ++i ) {
+    addEdge( [ p[ i ], p[ i + 1 ] ] );
+  }
+  addEdge( [ p[ n - 1 ], p[ 0 ] ] );
+};
+
 var addPolygon = function( n, x, y, r, t ) {
-  var l = vertices.length;
   var p = [];
   for( var i = 0; i < n; ++i ) {
     var u = i * Math.PI * 2 / n + t;
     var a = x + Math.sin( u ) * r;
     var b = y + Math.cos( u ) * r 
-    vertices[ i + l ] = [ a, b ];
-    p[ i ] = i + l;
+    p[ i ] = addVertex( [ a, b ] );
   }
+
+  addEdges( p );
+
   polygons.push( p );
 }
 
@@ -73,26 +119,47 @@ var norm = function( a ) {
   return div( a, len( a ) );
 }
 
-var addPolygonToEdge = function( n, a, b, r ) {
-  var vp = perpendicular( sub( b, a ) );
+var rotate = function( v, a ) {
+  var sa = Math.sin( a );
+  var ca = Math.cos( a );
+  return [ v[0] * ca - v[1] * sa, v[0] * sa + v[1] * ca ];
+}
 
-  var vn = mult( norm( vp ), r );
+var dist = function( a, b ) {
+  return len( sub( a, b ) );
+}
 
-  var vm = add( mid( a, b ), vn );
+// a & b are the vertices.
 
-  addPolygon( n, vm[0], vm[1], r, 0 );
+var addPolygonToEdge = function( n, a, b ) {
+  var l = vertices.length;
+
+  var va = vertices[ a ];
+  var vb = vertices[ b ];
+  var v = sub( vb, va );
+  var d = Math.PI * 2 / n;
+  var x = vb;
+  var p = [ a, b ];
+
+  for( var i = 2; i < n; ++i ) {
+    var v = rotate( v, d );
+    x = add( x, v );
+    p[ i ] = addVertex( x );
+  }
+
+  addEdges( p );
+  polygons.push( p );
 }
 
 var addToPolygon = function( n, r, p ) {
-  var l = vertices.length;
   var polygon = polygons[ p ];
-  var a = vertices[ polygon[ 0 ] ];
+  var a = polygon[ 0 ];
   for( var i = 1; i < polygon.length; ++i ) {
-    var b = vertices[ polygon[ i ] ];
-    addPolygonToEdge( n, b, a, r );
+    var b = polygon[ i ];
+    addPolygonToEdge( n, a, b, r );
     a = b;
   }
-  addPolygonToEdge( n, vertices[ polygon[ 0 ] ], b, r );
+  addPolygonToEdge( n, a, polygon[ 0 ], r );
 }
 
 var draw = function() {
@@ -104,6 +171,7 @@ var draw = function() {
   for( var p = 0; p < polygons.length; ++p )
   {
     ctx.strokeStyle = '#dddddd';
+    ctx.lineWidth = 1.0;
     ctx.beginPath();
     var polygon = polygons[p];
     var start = vertices[ polygon[0] ];
@@ -116,12 +184,27 @@ var draw = function() {
     ctx.closePath();
     ctx.stroke();
   }
+
+  for( var e = 0; e < edges.length; ++e )
+  {
+    ctx.strokeStyle = '#dddddd';
+    ctx.lineWidth = 3.0;
+    ctx.beginPath();
+    var edge = edges[ e ];
+    var start = vertices[ edge[ 0 ] ];
+    ctx.moveTo( start[0] + halfWidth, start[1] + halfHeight );
+    var end = vertices[ edge[ 1 ] ];
+    ctx.lineTo( end[0] + halfWidth, end[1] + halfHeight );
+    ctx.stroke();
+  }
+
+
 }
 
 
-addPolygon( 5, 0, 0, 100, 0 );
+addPolygon( 6, 0, 0, 100, 0 );
 
-addToPolygon( 5, 100, 0 );
+addToPolygon( 6, 100, 0 );
 
 $(window).on( "resize", resize );
 
